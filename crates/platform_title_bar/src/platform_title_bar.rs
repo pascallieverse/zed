@@ -4,7 +4,7 @@ mod system_window_tabs;
 use gpui::{
     AnyElement, App, Context, Decorations, Entity, Hsla, InteractiveElement, IntoElement,
     MouseButton, ParentElement, StatefulInteractiveElement, Styled, Window, WindowControlArea, div,
-    px,
+    px, Pixels,
 };
 use smallvec::SmallVec;
 use std::mem;
@@ -29,6 +29,7 @@ pub struct PlatformTitleBar {
     should_move: bool,
     system_window_tabs: Entity<SystemWindowTabs>,
     workspace_sidebar_open: bool,
+    workspace_sidebar_width: Pixels,
     sidebar_has_notifications: bool,
 }
 
@@ -44,6 +45,7 @@ impl PlatformTitleBar {
             should_move: false,
             system_window_tabs,
             workspace_sidebar_open: false,
+            workspace_sidebar_width: px(0.),
             sidebar_has_notifications: false,
         }
     }
@@ -75,8 +77,14 @@ impl PlatformTitleBar {
         self.workspace_sidebar_open
     }
 
-    pub fn set_workspace_sidebar_open(&mut self, open: bool, cx: &mut Context<Self>) {
+    pub fn set_workspace_sidebar_open(
+        &mut self,
+        open: bool,
+        width: Pixels,
+        cx: &mut Context<Self>,
+    ) {
         self.workspace_sidebar_open = open;
+        self.workspace_sidebar_width = width;
         cx.notify();
     }
 
@@ -158,9 +166,7 @@ impl Render for PlatformTitleBar {
             .map(|this| {
                 if window.is_fullscreen() {
                     this.pl_2()
-                } else if self.platform_style == PlatformStyle::Mac
-                    && !is_multiworkspace_sidebar_open
-                {
+                } else if self.platform_style == PlatformStyle::Mac {
                     this.pl(px(TRAFFIC_LIGHT_PADDING))
                 } else {
                     this.pl_2()

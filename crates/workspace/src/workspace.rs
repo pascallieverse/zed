@@ -1227,6 +1227,7 @@ pub struct Workspace {
     modal_layer: Entity<ModalLayer>,
     toast_layer: Entity<ToastLayer>,
     titlebar_item: Option<AnyView>,
+    skip_titlebar_render: bool,
     notifications: Notifications,
     suppressed_notifications: HashSet<NotificationId>,
     project: Entity<Project>,
@@ -1649,6 +1650,7 @@ impl Workspace {
             modal_layer,
             toast_layer,
             titlebar_item: None,
+            skip_titlebar_render: false,
             active_worktree_override: None,
             notifications: Notifications::default(),
             suppressed_notifications: HashSet::default(),
@@ -2498,6 +2500,10 @@ impl Workspace {
         self.titlebar_item.clone()
     }
 
+    pub fn set_skip_titlebar_render(&mut self, skip: bool) {
+        self.skip_titlebar_render = skip;
+    }
+
     /// Returns the worktree override set by the user (e.g., via the project dropdown).
     /// When set, git-related operations should use this worktree instead of deriving
     /// the active worktree from the focused file.
@@ -2952,6 +2958,25 @@ impl Workspace {
         let is_remote = self.project.read(cx).is_via_collab();
         let has_worktree = self.project.read(cx).worktrees(cx).next().is_some();
         let has_dirty_items = self.items(cx).any(|item| item.is_dirty(cx));
+
+        // If the current workspace is empty (no worktrees, not remote, no dirty items),
+        // open the paths directly into this workspace instead of creating a new one.
+        if !is_remote && !has_worktree && !has_dirty_items {
+            let task = self.open_paths(
+                paths,
+                OpenOptions {
+                    visible: Some(OpenVisible::All),
+                    ..Default::default()
+                },
+                None,
+                window,
+                cx,
+            );
+            return cx.spawn_in(window, async move |_, _| {
+                task.await;
+                Ok(())
+            });
+        }
 
         let window_to_replace = if replace_current_window {
             window_handle
@@ -7337,7 +7362,9 @@ impl Render for Workspace {
                 .items_start()
                 .text_color(colors.text)
                 .overflow_hidden()
-                .children(self.titlebar_item.clone())
+                .when(!self.skip_titlebar_render, |this| {
+                    this.children(self.titlebar_item.clone())
+                })
                 .on_modifiers_changed(move |_, _, cx| {
                     for &id in &notification_entities {
                         cx.notify(id);
@@ -8416,6 +8443,7 @@ pub async fn find_existing_workspace(
                     }
                 }
             }
+
         });
 
         let all_paths_are_files = existing

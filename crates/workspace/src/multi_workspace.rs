@@ -148,6 +148,12 @@ impl MultiWorkspace {
         self.sidebar_open && self.sidebar.is_some()
     }
 
+    pub fn sidebar_width(&self, cx: &App) -> Pixels {
+        self.sidebar
+            .as_ref()
+            .map_or(px(0.), |s| s.width(cx))
+    }
+
     pub fn sidebar_has_notifications(&self, cx: &App) -> bool {
         self.sidebar
             .as_ref()
@@ -565,6 +571,21 @@ impl MultiWorkspace {
 
 impl Render for MultiWorkspace {
     fn render(&mut self, window: &mut Window, cx: &mut Context<Self>) -> impl IntoElement {
+        // When the sidebar is open, extract the titlebar from the active workspace
+        // and render it at the top level so it spans the full window width.
+        let titlebar: Option<AnyView> = if self.sidebar_open {
+            let workspace = self.workspace().clone();
+            let titlebar = workspace.read(cx).titlebar_item();
+            workspace.update(cx, |ws, _| ws.set_skip_titlebar_render(true));
+            titlebar
+        } else {
+            // Ensure all workspaces render their own titlebars when sidebar is closed.
+            for ws in &self.workspaces {
+                ws.update(cx, |ws, _| ws.set_skip_titlebar_render(false));
+            }
+            None
+        };
+
         let sidebar: Option<AnyElement> = if self.sidebar_open {
             self.sidebar.as_ref().map(|sidebar_handle| {
                 let weak = cx.weak_entity();
@@ -614,42 +635,96 @@ impl Render for MultiWorkspace {
             None
         };
 
-        client_side_decorations(
-            h_flex()
-                .key_context("Workspace")
+        let workspace_container = {
+            let container = div()
+                .flex()
+                .flex_1()
                 .size_full()
-                .on_action(
-                    cx.listener(|this: &mut Self, _: &NewWorkspaceInWindow, window, cx| {
-                        this.create_workspace(window, cx);
-                    }),
-                )
-                .on_action(
-                    cx.listener(|this: &mut Self, _: &NextWorkspaceInWindow, window, cx| {
-                        this.activate_next_workspace(window, cx);
-                    }),
-                )
-                .on_action(cx.listener(
-                    |this: &mut Self, _: &PreviousWorkspaceInWindow, window, cx| {
-                        this.activate_previous_workspace(window, cx);
-                    },
-                ))
-                .on_action(cx.listener(
-                    |this: &mut Self, _: &RemoveActiveWorkspace, window, cx| {
-                        this.remove_active_workspace(window, cx);
-                    },
-                ))
-                .on_action(cx.listener(
-                    |this: &mut Self, _: &ToggleWorkspaceSidebar, window, cx| {
-                        this.toggle_sidebar(window, cx);
-                    },
-                ))
-                .on_action(
-                    cx.listener(|this: &mut Self, _: &FocusWorkspaceSidebar, window, cx| {
-                        this.focus_sidebar(window, cx);
-                    }),
-                )
-                .when(self.sidebar_open(), |this| {
-                        this.on_drag_move(cx.listener(
+                .overflow_hidden()
+                .relative();
+
+            if let Some(previous_index) = self.previous_workspace_index {
+                let transition_id = self.transition_id;
+                let previous_workspace = self.workspaces[previous_index].clone();
+                let active_workspace = self.workspace().clone();
+
+                container
+                    .child(
+                        div()
+                            .id(("crossfade-out", transition_id))
+                            .absolute()
+                            .size_full()
+                            .child(previous_workspace)
+                            .with_animation(
+                                ("crossfade-out", transition_id),
+                                Animation::new(CROSSFADE_DURATION)
+                                    .with_easing(ease_out_quint()),
+                                |this, delta| this.opacity(1.0 - delta),
+                            ),
+                    )
+                    .child(
+                        div()
+                            .id(("crossfade-in", transition_id))
+                            .size_full()
+                            .child(active_workspace)
+                            .with_animation(
+                                ("crossfade-in", transition_id),
+                                Animation::new(CROSSFADE_DURATION)
+                                    .with_easing(ease_out_quint()),
+                                |this, delta| this.opacity(delta),
+                            ),
+                    )
+            } else {
+                container.child(self.workspace().clone())
+            }
+        };
+
+        let actions_div = div()
+            .key_context("Workspace")
+            .size_full()
+            .on_action(
+                cx.listener(|this: &mut Self, _: &NewWorkspaceInWindow, window, cx| {
+                    this.create_workspace(window, cx);
+                }),
+            )
+            .on_action(
+                cx.listener(|this: &mut Self, _: &NextWorkspaceInWindow, window, cx| {
+                    this.activate_next_workspace(window, cx);
+                }),
+            )
+            .on_action(cx.listener(
+                |this: &mut Self, _: &PreviousWorkspaceInWindow, window, cx| {
+                    this.activate_previous_workspace(window, cx);
+                },
+            ))
+            .on_action(cx.listener(
+                |this: &mut Self, _: &RemoveActiveWorkspace, window, cx| {
+                    this.remove_active_workspace(window, cx);
+                },
+            ))
+            .on_action(cx.listener(
+                |this: &mut Self, _: &ToggleWorkspaceSidebar, window, cx| {
+                    this.toggle_sidebar(window, cx);
+                },
+            ))
+            .on_action(
+                cx.listener(|this: &mut Self, _: &FocusWorkspaceSidebar, window, cx| {
+                    this.focus_sidebar(window, cx);
+                }),
+            );
+
+        let content = if titlebar.is_some() {
+            // Sidebar open: titlebar spans full width at top,
+            // sidebar and workspace content sit below it.
+            actions_div
+                .flex()
+                .flex_col()
+                .children(titlebar)
+                .child(
+                    h_flex()
+                        .flex_1()
+                        .overflow_hidden()
+                        .on_drag_move(cx.listener(
                             |this: &mut Self, e: &DragMoveEvent<DraggedSidebar>, _window, cx| {
                                 if let Some(sidebar) = &this.sidebar {
                                     let new_width = e.event.position.x;
@@ -658,51 +733,15 @@ impl Render for MultiWorkspace {
                             },
                         ))
                         .children(sidebar)
-                    },
+                        .child(workspace_container),
                 )
-                .child({
-                    let workspace_container = div()
-                        .flex()
-                        .flex_1()
-                        .size_full()
-                        .overflow_hidden()
-                        .relative();
+        } else {
+            // No sidebar: workspace takes full width with its own titlebar.
+            actions_div.child(workspace_container)
+        };
 
-                    if let Some(previous_index) = self.previous_workspace_index {
-                        let transition_id = self.transition_id;
-                        let previous_workspace = self.workspaces[previous_index].clone();
-                        let active_workspace = self.workspace().clone();
-
-                        workspace_container
-                            .child(
-                                div()
-                                    .id(("crossfade-out", transition_id))
-                                    .absolute()
-                                    .size_full()
-                                    .child(previous_workspace)
-                                    .with_animation(
-                                        ("crossfade-out", transition_id),
-                                        Animation::new(CROSSFADE_DURATION)
-                                            .with_easing(ease_out_quint()),
-                                        |this, delta| this.opacity(1.0 - delta),
-                                    ),
-                            )
-                            .child(
-                                div()
-                                    .id(("crossfade-in", transition_id))
-                                    .size_full()
-                                    .child(active_workspace)
-                                    .with_animation(
-                                        ("crossfade-in", transition_id),
-                                        Animation::new(CROSSFADE_DURATION)
-                                            .with_easing(ease_out_quint()),
-                                        |this, delta| this.opacity(delta),
-                                    ),
-                            )
-                    } else {
-                        workspace_container.child(self.workspace().clone())
-                    }
-                }),
+        client_side_decorations(
+            content,
             window,
             cx,
             Tiling {
