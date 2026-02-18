@@ -1,7 +1,6 @@
 mod platforms;
 mod system_window_tabs;
 
-use feature_flags::{AgentV2FeatureFlag, FeatureFlagAppExt};
 use gpui::{
     AnyElement, App, Context, Decorations, Entity, Hsla, InteractiveElement, IntoElement,
     MouseButton, ParentElement, StatefulInteractiveElement, Styled, Window, WindowControlArea, div,
@@ -94,8 +93,8 @@ impl PlatformTitleBar {
         cx.notify();
     }
 
-    pub fn is_multi_workspace_enabled(cx: &App) -> bool {
-        cx.has_flag::<AgentV2FeatureFlag>()
+    pub fn is_multi_workspace_enabled(_cx: &App) -> bool {
+        true
     }
 }
 

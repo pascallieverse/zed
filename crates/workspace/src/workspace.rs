@@ -24,8 +24,8 @@ pub use crate::notifications::NotificationFrame;
 pub use dock::Panel;
 pub use multi_workspace::{
     DraggedSidebar, FocusWorkspaceSidebar, MultiWorkspace, NewWorkspaceInWindow,
-    NextWorkspaceInWindow, PreviousWorkspaceInWindow, Sidebar, SidebarEvent, SidebarHandle,
-    ToggleWorkspaceSidebar,
+    NextWorkspaceInWindow, PreviousWorkspaceInWindow, RemoveActiveWorkspace, Sidebar,
+    SidebarEvent, SidebarHandle, ToggleWorkspaceSidebar,
 };
 pub use path_list::PathList;
 pub use toast_layer::{ToastAction, ToastLayer, ToastView};
@@ -1256,6 +1256,7 @@ pub struct Workspace {
     serializable_items_tx: UnboundedSender<Box<dyn SerializableItemHandle>>,
     _items_serializer: Task<Result<()>>,
     session_id: Option<String>,
+    preserve_session: bool,
     scheduled_tasks: Vec<Task<()>>,
     last_open_dock_positions: Vec<DockPosition>,
     removing: bool,
@@ -1683,6 +1684,7 @@ impl Workspace {
             serializable_items_tx,
             _items_serializer,
             session_id: Some(session_id),
+            preserve_session: false,
 
             scheduled_tasks: Vec::new(),
             last_open_dock_positions: Vec::new(),
@@ -5817,6 +5819,14 @@ impl Workspace {
         self.database_id
     }
 
+    pub(crate) fn set_database_id(&mut self, id: WorkspaceId) {
+        self.database_id = Some(id);
+    }
+
+    pub(crate) fn set_preserve_session(&mut self, value: bool) {
+        self.preserve_session = value;
+    }
+
     pub fn session_id(&self) -> Option<String> {
         self.session_id.clone()
     }
@@ -5869,7 +5879,7 @@ impl Workspace {
         cx.notify();
     }
 
-    fn serialize_workspace(&mut self, window: &mut Window, cx: &mut Context<Self>) {
+    pub(crate) fn serialize_workspace(&mut self, window: &mut Window, cx: &mut Context<Self>) {
         if self._schedule_serialize_workspace.is_none() {
             self._schedule_serialize_workspace =
                 Some(cx.spawn_in(window, async move |this, cx| {
@@ -6075,7 +6085,7 @@ impl Workspace {
         if let Some(connection) = self.project.read(cx).remote_connection_options(cx) {
             WorkspaceLocation::Location(SerializedWorkspaceLocation::Remote(connection), paths)
         } else if self.project.read(cx).is_local() {
-            if !paths.is_empty() || self.has_any_items_open(cx) {
+            if !paths.is_empty() || self.has_any_items_open(cx) || self.preserve_session {
                 WorkspaceLocation::Location(SerializedWorkspaceLocation::Local, paths)
             } else {
                 WorkspaceLocation::DetachFromSession
