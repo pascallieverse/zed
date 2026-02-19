@@ -499,6 +499,14 @@ pub fn initialize_workspace(
         initialize_panels(prompt_builder.clone(), window, cx);
         register_actions(app_state.clone(), workspace, window, cx);
 
+        let project = workspace.project().clone();
+        cx.subscribe_in(&project, window, |workspace, _, event, window, cx| {
+            if matches!(event, project::Event::WorktreeAdded(_)) {
+                open_default_docks_if_needed(workspace, window, cx);
+            }
+        })
+        .detach();
+
         workspace.focus_handle(cx).focus(window, cx);
     })
     .detach();
@@ -657,12 +665,45 @@ fn initialize_panels(
             add_panel_when_ready(channels_panel, workspace_handle.clone(), cx.clone()),
             add_panel_when_ready(notification_panel, workspace_handle.clone(), cx.clone()),
             add_panel_when_ready(debug_panel, workspace_handle.clone(), cx.clone()),
-            initialize_agent_panel(workspace_handle, prompt_builder, cx.clone()).map(|r| r.log_err()),
+            initialize_agent_panel(workspace_handle.clone(), prompt_builder, cx.clone())
+                .map(|r| r.log_err()),
         );
+
+        workspace_handle
+            .update_in(cx, |workspace, window, cx| {
+                open_default_docks_if_needed(workspace, window, cx);
+            })
+            .ok();
 
         anyhow::Ok(())
     })
     .detach();
+}
+
+fn open_default_docks_if_needed(
+    workspace: &mut Workspace,
+    window: &mut Window,
+    cx: &mut Context<Workspace>,
+) {
+    let has_worktrees = workspace
+        .project()
+        .read(cx)
+        .visible_worktrees(cx)
+        .next()
+        .is_some();
+    if !has_worktrees {
+        return;
+    }
+    for dock in [workspace.left_dock().clone(), workspace.bottom_dock().clone()] {
+        dock.update(cx, |dock, cx| {
+            if !dock.is_open() {
+                if let Ok(panel_ix) = dock.first_enabled_panel_idx(cx) {
+                    dock.activate_panel(panel_ix, window, cx);
+                    dock.set_open(true, window, cx);
+                }
+            }
+        });
+    }
 }
 
 fn setup_or_teardown_ai_panel<P: Panel>(

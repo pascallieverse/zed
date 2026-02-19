@@ -192,7 +192,7 @@ impl Render for PlatformTitleBar {
             .content_stretch()
             .child(
                 div()
-                    .id(self.id.clone())
+                    .id(("title-bar-content", 0u64))
                     .flex()
                     .flex_row()
                     .items_center()
