@@ -694,7 +694,11 @@ fn open_default_docks_if_needed(
     if !has_worktrees {
         return;
     }
-    for dock in [workspace.left_dock().clone(), workspace.bottom_dock().clone()] {
+    for dock in [
+        workspace.left_dock().clone(),
+        workspace.bottom_dock().clone(),
+        workspace.right_dock().clone(),
+    ] {
         dock.update(cx, |dock, cx| {
             if !dock.is_open() {
                 if let Ok(panel_ix) = dock.first_enabled_panel_idx(cx) {
@@ -1391,6 +1395,32 @@ fn quit(_: &Quit, cx: &mut App) {
                 }
             }
         }
+        // Flush workspace serialization before quitting, bypassing the throttle,
+        // so that the current state is persisted even on abrupt shutdown.
+        let workspace_windows: Vec<WindowHandle<MultiWorkspace>> = cx.update(|cx| {
+            cx.windows()
+                .into_iter()
+                .filter_map(|window| window.downcast::<MultiWorkspace>())
+                .collect()
+        });
+        for window in workspace_windows {
+            let serialize_tasks = window
+                .update(cx, |multi_workspace, window, cx| {
+                    let mut tasks = Vec::new();
+                    for workspace in multi_workspace.workspaces() {
+                        let task = workspace.update(cx, |workspace, cx| {
+                            workspace.serialize_workspace_internal(window, cx)
+                        });
+                        tasks.push(task);
+                    }
+                    tasks
+                })
+                .unwrap_or_default();
+            for task in serialize_tasks {
+                task.await;
+            }
+        }
+
         cx.update(|cx| cx.quit());
         anyhow::Ok(())
     })

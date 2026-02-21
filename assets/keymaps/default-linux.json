@@ -604,6 +604,10 @@
       "ctrl-j": "workspace::ToggleBottomDock",
       "ctrl-alt-j": "multi_workspace::ToggleWorkspaceSidebar",
       "ctrl-alt-;": "multi_workspace::FocusWorkspaceSidebar",
+      "ctrl-alt-]": "multi_workspace::NextWorkspaceInWindow",
+      "ctrl-alt-[": "multi_workspace::PreviousWorkspaceInWindow",
+      "ctrl-alt-down": "multi_workspace::NextWorkspaceInWindow",
+      "ctrl-alt-up": "multi_workspace::PreviousWorkspaceInWindow",
       "ctrl-alt-y": "workspace::ToggleAllDocks",
       "ctrl-alt-0": "workspace::ResetActiveDockSize",
       // For 0px parameter, uses UI font size value.
@@ -668,6 +672,8 @@
     "use_key_equivalents": true,
     "bindings": {
       "ctrl-n": "multi_workspace::NewWorkspaceInWindow",
+      "up": "multi_workspace::PreviousWorkspaceInWindow",
+      "down": "multi_workspace::NextWorkspaceInWindow",
     },
   },
   {

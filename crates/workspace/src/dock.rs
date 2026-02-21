@@ -603,10 +603,13 @@ impl Dock {
             },
         );
 
+        let was_open = self.is_open();
         self.restore_state(window, cx);
 
         if panel.read(cx).starts_open(window, cx) {
             self.activate_panel(index, window, cx);
+            self.set_open(true, window, cx);
+        } else if was_open {
             self.set_open(true, window, cx);
         }
 

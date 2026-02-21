@@ -15306,6 +15306,8 @@ dependencies = [
  "serde",
  "serde_json",
  "settings",
+ "terminal",
+ "terminal_view",
  "theme",
  "ui",
  "workspace",

@@ -275,7 +275,10 @@ impl MultiWorkspace {
         if index == self.active_workspace_index {
             return;
         }
-        self.previous_workspace_index = Some(self.active_workspace_index);
+        let already_transitioning = self.previous_workspace_index.is_some();
+        if !already_transitioning {
+            self.previous_workspace_index = Some(self.active_workspace_index);
+        }
         self.active_workspace_index = index;
         self.transition_id += 1;
         self._transition_cleanup = Some(cx.spawn_in(window, {
@@ -292,7 +295,13 @@ impl MultiWorkspace {
             }
         }));
         self.serialize(cx);
-        self.focus_active_workspace(window, cx);
+        let sidebar_is_focused = self
+            .sidebar
+            .as_ref()
+            .is_some_and(|s| s.focus_handle(cx).contains_focused(window, cx));
+        if !sidebar_is_focused {
+            self.focus_active_workspace(window, cx);
+        }
         cx.notify();
     }
 

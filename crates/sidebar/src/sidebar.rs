@@ -3,9 +3,9 @@ use agent_ui::{AgentPanel, AgentPanelEvent};
 use db::kvp::KEY_VALUE_STORE;
 use editor::Editor;
 use gpui::{
-    App, Context, DismissEvent, Entity, EventEmitter, FocusHandle, Focusable, Hsla, MouseButton,
-    MouseDownEvent, Pixels, Point, Render, SharedString, Subscription, Window, anchored, deferred,
-    px,
+    App, Context, DismissEvent, Entity, EntityId, EventEmitter, FocusHandle, Focusable, Hsla,
+    MouseButton, MouseDownEvent, Pixels, Point, Render, SharedString, Subscription, Task, Window,
+    anchored, deferred, px,
 };
 use menu;
 use project::Event as ProjectEvent;
@@ -13,6 +13,10 @@ use serde::{Deserialize, Serialize};
 use std::collections::{HashMap, HashSet};
 use std::path::Path;
 use std::sync::Arc;
+use std::time::{Duration, Instant};
+use terminal::Event as TerminalEvent;
+use terminal_view::TerminalView;
+use terminal_view::terminal_panel::TerminalPanel;
 use theme::ActiveTheme;
 use ui::{ContextMenu, Tooltip, prelude::*};
 use workspace::{
@@ -32,6 +36,13 @@ struct AgentThreadInfo {
     status: AgentThreadStatus,
 }
 
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub enum ClaudeCodeStatus {
+    Active,
+    NeedsAction,
+    Idle,
+}
+
 struct WorkspaceEntry {
     index: usize,
     label: SharedString,
@@ -40,6 +51,7 @@ struct WorkspaceEntry {
     custom_color: Option<Hsla>,
     has_thread: bool,
     thread_running: bool,
+    claude_code_status: Option<ClaudeCodeStatus>,
 }
 
 impl WorkspaceEntry {
@@ -101,6 +113,7 @@ impl WorkspaceEntry {
             custom_color,
             has_thread,
             thread_running,
+            claude_code_status: None,
         }
     }
 
@@ -313,13 +326,13 @@ impl Render for EditWorkspacePopup {
                             .rounded_full()
                             .cursor_pointer()
                             .bg(cx.theme().colors().element_background)
-                            .border_1()
                             .when(selected_color.is_none(), |this| {
-                                this.border_color(cx.theme().colors().border_focused)
-                                    .border_2()
+                                this.border_2()
+                                    .border_color(gpui::hsla(0.0, 0.0, 1.0, 0.9))
                             })
                             .when(selected_color.is_some(), |this| {
-                                this.border_color(cx.theme().colors().border)
+                                this.border_1()
+                                    .border_color(cx.theme().colors().border)
                             })
                             .tooltip(Tooltip::text("Auto"))
                             .on_click(cx.listener(|this, _, _window, cx| {
@@ -338,13 +351,13 @@ impl Render for EditWorkspacePopup {
                             .rounded_full()
                             .cursor_pointer()
                             .bg(color)
-                            .border_1()
                             .when(is_selected, |this| {
-                                this.border_color(cx.theme().colors().border_focused)
-                                    .border_2()
+                                this.border_2()
+                                    .border_color(gpui::hsla(0.0, 0.0, 1.0, 0.9))
                             })
                             .when(!is_selected, |this| {
-                                this.border_color(gpui::hsla(0.0, 0.0, 1.0, 0.2))
+                                this.border_1()
+                                    .border_color(gpui::hsla(0.0, 0.0, 1.0, 0.2))
                             })
                             .tooltip(Tooltip::text(name.clone()))
                             .on_click(cx.listener(move |this, _, _window, cx| {
@@ -392,6 +405,7 @@ pub struct Sidebar {
     focus_handle: FocusHandle,
     entries: Vec<WorkspaceEntry>,
     active_workspace_index: usize,
+    hovered_index: Option<usize>,
     notified_workspaces: HashSet<usize>,
     customizations: HashMap<String, WorkspaceCustomization>,
     context_menu: Option<(Entity<ContextMenu>, Point<Pixels>, Subscription)>,
@@ -400,6 +414,9 @@ pub struct Sidebar {
     _project_subscriptions: Vec<Subscription>,
     _agent_panel_subscriptions: Vec<Subscription>,
     _thread_subscriptions: Vec<Subscription>,
+    _terminal_subscriptions: Vec<Subscription>,
+    claude_wakeup_times: HashMap<EntityId, Instant>,
+    claude_activity_timer: Option<Task<()>>,
     #[cfg(any(test, feature = "test-support"))]
     test_thread_infos: HashMap<usize, AgentThreadInfo>,
 }
@@ -432,6 +449,7 @@ impl Sidebar {
             focus_handle: cx.focus_handle(),
             entries: Vec::new(),
             active_workspace_index: 0,
+            hovered_index: None,
             notified_workspaces: HashSet::new(),
             customizations,
             context_menu: None,
@@ -440,6 +458,9 @@ impl Sidebar {
             _project_subscriptions: Vec::new(),
             _agent_panel_subscriptions: Vec::new(),
             _thread_subscriptions: Vec::new(),
+            _terminal_subscriptions: Vec::new(),
+            claude_wakeup_times: HashMap::new(),
+            claude_activity_timer: None,
             #[cfg(any(test, feature = "test-support"))]
             test_thread_infos: HashMap::new(),
         };
@@ -525,6 +546,167 @@ impl Sidebar {
             .collect()
     }
 
+    fn subscribe_to_terminals(
+        &mut self,
+        window: &mut Window,
+        cx: &mut Context<Self>,
+    ) -> Vec<Subscription> {
+        let workspaces: Vec<_> = self.multi_workspace.read(cx).workspaces().to_vec();
+        let mut subscriptions = Vec::new();
+
+        let mut terminal_panels = Vec::new();
+        let mut terminals = Vec::new();
+
+        for workspace in &workspaces {
+            if let Some(terminal_panel) = workspace.read(cx).panel::<TerminalPanel>(cx) {
+                for pane in terminal_panel.read(cx).panes() {
+                    for item in pane.read(cx).items() {
+                        if let Some(terminal_view) = item.act_as::<TerminalView>(cx) {
+                            terminals.push(terminal_view.read(cx).terminal().clone());
+                        }
+                    }
+                }
+                terminal_panels.push(terminal_panel);
+            }
+        }
+
+        for terminal_panel in &terminal_panels {
+            subscriptions.push(cx.observe_in(
+                terminal_panel,
+                window,
+                |this, _, window, cx| {
+                    this.queue_refresh(this.multi_workspace.clone(), window, cx);
+                },
+            ));
+        }
+
+        for terminal in &terminals {
+            subscriptions.push(cx.subscribe_in(
+                terminal,
+                window,
+                |this, terminal, event: &TerminalEvent, window, cx| match event {
+                    TerminalEvent::Wakeup => {
+                        let terminal_id = terminal.entity_id();
+                        let was_inactive = this
+                            .claude_wakeup_times
+                            .get(&terminal_id)
+                            .map(|t| t.elapsed() > Duration::from_secs(3))
+                            .unwrap_or(true);
+
+                        this.claude_wakeup_times
+                            .insert(terminal_id, Instant::now());
+
+                        let is_claude = terminal
+                            .read(cx)
+                            .foreground_process_name()
+                            .is_some_and(|name| name == "claude");
+
+                        if is_claude {
+                            if was_inactive {
+                                this.queue_refresh(
+                                    this.multi_workspace.clone(),
+                                    window,
+                                    cx,
+                                );
+                            }
+
+                            this.claude_activity_timer =
+                                Some(cx.spawn(async move |weak_this, cx| {
+                                    cx.background_executor()
+                                        .timer(Duration::from_secs(3))
+                                        .await;
+                                    weak_this
+                                        .update(cx, |this, cx| {
+                                            let entries = {
+                                                let multi_workspace_ref =
+                                                    this.multi_workspace.read(cx);
+                                                this.build_entries(multi_workspace_ref, cx)
+                                            };
+                                            this.update_notifications(&entries);
+                                            this.entries = entries;
+                                            cx.notify();
+                                        })
+                                        .ok();
+                                }));
+                        }
+                    }
+                    TerminalEvent::TitleChanged => {
+                        this.queue_refresh(this.multi_workspace.clone(), window, cx);
+                    }
+                    _ => {}
+                },
+            ));
+        }
+
+        subscriptions
+    }
+
+    fn compute_claude_code_status(
+        &self,
+        workspace: &Entity<Workspace>,
+        cx: &App,
+    ) -> Option<ClaudeCodeStatus> {
+        let terminal_panel = workspace.read(cx).panel::<TerminalPanel>(cx)?;
+
+        let mut best_status: Option<ClaudeCodeStatus> = None;
+
+        for pane in terminal_panel.read(cx).panes() {
+            for item in pane.read(cx).items() {
+                let Some(terminal_view) = item.act_as::<TerminalView>(cx) else {
+                    continue;
+                };
+                let terminal = terminal_view.read(cx).terminal();
+                let terminal_ref = terminal.read(cx);
+
+                let is_claude = terminal_ref
+                    .foreground_process_name()
+                    .is_some_and(|name| name == "claude");
+
+                if !is_claude {
+                    continue;
+                }
+
+                let is_recently_active = self
+                    .claude_wakeup_times
+                    .get(&terminal.entity_id())
+                    .map(|t| t.elapsed() < Duration::from_secs(3))
+                    .unwrap_or(false);
+
+                if is_recently_active {
+                    return Some(ClaudeCodeStatus::Active);
+                }
+
+                let lines = terminal_ref.last_n_non_empty_lines(30);
+                let needs_action = lines.iter().any(|line| {
+                    let trimmed = line.trim();
+                    (trimmed.contains("Allow") && !trimmed.contains("Allowed"))
+                        || trimmed.contains("Deny")
+                        || trimmed.contains("[Y/n]")
+                        || trimmed.contains("[y/n]")
+                        || trimmed.contains("(y/n)")
+                        || trimmed.contains("(Y/n)")
+                        || trimmed.contains("Do you want")
+                        || trimmed.contains("approve")
+                        || trimmed.ends_with('?')
+                });
+
+                let status = if needs_action {
+                    ClaudeCodeStatus::NeedsAction
+                } else {
+                    ClaudeCodeStatus::Idle
+                };
+
+                best_status = Some(match best_status {
+                    None => status,
+                    Some(ClaudeCodeStatus::NeedsAction) => ClaudeCodeStatus::NeedsAction,
+                    Some(_) => status,
+                });
+            }
+        }
+
+        best_status
+    }
+
     fn build_entries(&self, multi_workspace: &MultiWorkspace, cx: &App) -> Vec<WorkspaceEntry> {
         #[allow(unused_mut)]
         let mut entries: Vec<WorkspaceEntry> = multi_workspace
@@ -534,7 +716,9 @@ impl Sidebar {
             .map(|(index, workspace)| {
                 let key = workspace_paths_key(workspace.read(cx), cx);
                 let customization = self.customizations.get(&key);
-                WorkspaceEntry::new(index, workspace, customization, cx)
+                let mut entry = WorkspaceEntry::new(index, workspace, customization, cx);
+                entry.claude_code_status = self.compute_claude_code_status(workspace, cx);
+                entry
             })
             .collect();
 
@@ -578,6 +762,7 @@ impl Sidebar {
             this._project_subscriptions = this.subscribe_to_projects(_window, cx);
             this._agent_panel_subscriptions = this.subscribe_to_agent_panels(_window, cx);
             this._thread_subscriptions = this.subscribe_to_threads(_window, cx);
+            this._terminal_subscriptions = this.subscribe_to_terminals(_window, cx);
 
             let (entries, active_index) = multi_workspace.read_with(cx, |multi_workspace, cx| {
                 (
@@ -659,6 +844,7 @@ impl Sidebar {
             cx.notify();
         });
         self.context_menu = Some((context_menu, position, subscription));
+        self.hovered_index = None;
         cx.notify();
     }
 
@@ -735,6 +921,7 @@ impl Sidebar {
             });
 
         self.edit_popup = Some((popup, position, vec![dismiss_subscription, save_subscription]));
+        self.hovered_index = None;
         cx.notify();
     }
 
@@ -758,13 +945,13 @@ impl Sidebar {
         let index = entry.index;
         let is_active = index == self.active_workspace_index;
         let has_notification = self.notified_workspaces.contains(&index);
-        let has_context_menu = self
-            .context_menu
-            .as_ref()
-            .is_some_and(|(_, _, _)| true);
+        let is_hovered = self.hovered_index == Some(index)
+            && self.context_menu.is_none()
+            && self.edit_popup.is_none();
         let initials = entry.initials.clone();
         let label = entry.label.clone();
         let full_path = entry.full_path.clone();
+        let claude_code_status = entry.claude_code_status.clone();
         let background_color = entry
             .custom_color
             .unwrap_or_else(|| deterministic_color(label.as_ref()));
@@ -782,12 +969,20 @@ impl Sidebar {
             .justify_center()
             .cursor_pointer()
             .bg(background_color)
-            .when(!has_context_menu, |this| {
-                this.hover(|style| style.opacity(0.8))
-            })
+            .on_hover(cx.listener(move |this, hovered: &bool, _window, cx| {
+                if this.context_menu.is_some() || this.edit_popup.is_some() {
+                    return;
+                }
+                let new_value = if *hovered { Some(index) } else { None };
+                if this.hovered_index != new_value {
+                    this.hovered_index = new_value;
+                    cx.notify();
+                }
+            }))
+            .when(is_hovered, |this| this.opacity(0.8))
             .when(is_active, |this| {
-                this.border_l(px(3.))
-                    .border_color(cx.theme().colors().border_focused)
+                this.border_2()
+                    .border_color(gpui::hsla(0.0, 0.0, 1.0, 0.6))
             })
             .when(has_notification, |this| {
                 this.border_r(px(2.))
@@ -799,6 +994,34 @@ impl Sidebar {
                     .text_color(gpui::hsla(0.0, 0.0, 1.0, 0.95))
                     .child(initials),
             )
+            .when_some(claude_code_status, |this, status| {
+                let (color, border_color) = match status {
+                    ClaudeCodeStatus::Active => (
+                        gpui::hsla(0.33, 0.9, 0.5, 1.0),
+                        gpui::hsla(0.0, 0.0, 0.12, 1.0),
+                    ),
+                    ClaudeCodeStatus::NeedsAction => (
+                        gpui::hsla(0.08, 0.9, 0.5, 1.0),
+                        gpui::hsla(0.0, 0.0, 0.12, 1.0),
+                    ),
+                    ClaudeCodeStatus::Idle => (
+                        gpui::hsla(0.33, 0.3, 0.35, 0.7),
+                        gpui::hsla(0.0, 0.0, 0.12, 0.7),
+                    ),
+                };
+                this.child(
+                    div()
+                        .absolute()
+                        .bottom_0()
+                        .right_0()
+                        .w(px(10.))
+                        .h(px(10.))
+                        .rounded_full()
+                        .bg(color)
+                        .border_1()
+                        .border_color(border_color),
+                )
+            })
             .on_drag(
                 DraggedProjectIcon { index },
                 |dragged, _, _, cx| cx.new(|_| dragged.clone()),
@@ -815,32 +1038,33 @@ impl Sidebar {
                     icon
                 }
             })
-            .on_drop(cx.listener(
-                move |this, dragged: &DraggedProjectIcon, window, cx| {
+            .on_drop({
+                let multi_workspace = multi_workspace.clone();
+                move |dragged: &DraggedProjectIcon, window, cx| {
                     let from = dragged.index;
                     let to = index;
                     if from != to {
-                        this.multi_workspace.update(cx, |mw, cx| {
+                        multi_workspace.update(cx, |mw, cx| {
                             mw.move_workspace(from, to, window, cx);
                         });
                     }
-                },
-            ))
+                }
+            })
             .on_click({
                 let multi_workspace = multi_workspace.clone();
-                cx.listener(move |_this, _event, window, cx| {
+                move |_event, window, cx| {
                     multi_workspace.update(cx, |mw, cx| {
                         mw.activate_index(index, window, cx);
                     });
-                })
+                }
             })
             .on_mouse_down(MouseButton::Middle, {
                 let multi_workspace = multi_workspace.clone();
-                cx.listener(move |_this, _event, window, cx| {
+                move |_event, window, cx| {
                     multi_workspace.update(cx, |mw, cx| {
                         mw.remove_workspace(index, window, cx);
                     });
-                })
+                }
             })
             .on_mouse_down(
                 MouseButton::Right,
@@ -848,17 +1072,32 @@ impl Sidebar {
                     this.deploy_context_menu(index, event.position, window, cx);
                 }),
             )
-            .tooltip({
-                let label_clone = label.clone();
-                let full_path_clone = full_path.clone();
-                move |_, cx| {
-                    if full_path_clone.is_empty() {
-                        Tooltip::with_meta(label_clone.clone(), None, "Not connected", cx)
-                    } else {
-                        Tooltip::with_meta(label_clone.clone(), None, full_path_clone.clone(), cx)
-                    }
-                }
-            })
+            .when(
+                self.context_menu.is_none() && self.edit_popup.is_none(),
+                |this| {
+                    this.tooltip({
+                        let label_clone = label.clone();
+                        let full_path_clone = full_path.clone();
+                        move |_, cx| {
+                            if full_path_clone.is_empty() {
+                                Tooltip::with_meta(
+                                    label_clone.clone(),
+                                    None,
+                                    "Not connected",
+                                    cx,
+                                )
+                            } else {
+                                Tooltip::with_meta(
+                                    label_clone.clone(),
+                                    None,
+                                    full_path_clone.clone(),
+                                    cx,
+                                )
+                            }
+                        }
+                    })
+                },
+            )
     }
 
     fn render_add_button(&self, cx: &mut Context<Self>) -> impl IntoElement {
@@ -954,10 +1193,19 @@ impl Render for Sidebar {
             )
             .children(self.context_menu.as_ref().map(|(menu, position, _)| {
                 deferred(
-                    anchored()
-                        .position(*position)
-                        .anchor(gpui::Corner::TopLeft)
-                        .child(menu.clone()),
+                    div()
+                        .id("context-menu-backdrop")
+                        .absolute()
+                        .size_full()
+                        .top_0()
+                        .left_0()
+                        .occlude()
+                        .child(
+                            anchored()
+                                .position(*position)
+                                .anchor(gpui::Corner::TopLeft)
+                                .child(menu.clone()),
+                        ),
                 )
                 .with_priority(3)
             }))

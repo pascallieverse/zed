@@ -667,6 +667,8 @@
       "cmd-alt-;": "multi_workspace::FocusWorkspaceSidebar",
       "ctrl-alt-]": "multi_workspace::NextWorkspaceInWindow",
       "ctrl-alt-[": "multi_workspace::PreviousWorkspaceInWindow",
+      "ctrl-alt-down": "multi_workspace::NextWorkspaceInWindow",
+      "ctrl-alt-up": "multi_workspace::PreviousWorkspaceInWindow",
       "cmd-alt-w": "multi_workspace::RemoveActiveWorkspace",
       "alt-cmd-y": "workspace::ToggleAllDocks",
       // For 0px parameter, uses UI font size value.
@@ -732,6 +734,8 @@
     "use_key_equivalents": true,
     "bindings": {
       "cmd-n": "multi_workspace::NewWorkspaceInWindow",
+      "up": "multi_workspace::PreviousWorkspaceInWindow",
+      "down": "multi_workspace::NextWorkspaceInWindow",
     },
   },
   {
@@ -1233,8 +1237,6 @@
       // Using `ctrl-shift-space` in Zed requires disabling the macOS global shortcut.
       // System Preferences->Keyboard->Keyboard Shortcuts->Input Sources->Select the previous input source (uncheck)
       "ctrl-shift-space": "terminal::ToggleViMode",
-      "ctrl-alt-up": "pane::SplitUp",
-      "ctrl-alt-down": "pane::SplitDown",
       "ctrl-alt-left": "pane::SplitLeft",
       "ctrl-alt-right": "pane::SplitRight",
       "cmd-d": "pane::SplitRight",

@@ -487,8 +487,6 @@
     "bindings": {
       "ctrl-[": "editor::Outdent",
       "ctrl-]": "editor::Indent",
-      "ctrl-alt-up": ["editor::AddSelectionAbove", { "skip_soft_wrap": true }], // Insert Cursor Above
-      "ctrl-alt-down": ["editor::AddSelectionBelow", { "skip_soft_wrap": true }], // Insert Cursor Below
       "ctrl-shift-k": "editor::DeleteLine",
       "alt-up": "editor::MoveLineUp",
       "alt-down": "editor::MoveLineDown",
@@ -599,6 +597,10 @@
       "ctrl-j": "workspace::ToggleBottomDock",
       "ctrl-alt-j": "multi_workspace::ToggleWorkspaceSidebar",
       "ctrl-alt-;": "multi_workspace::FocusWorkspaceSidebar",
+      "ctrl-alt-]": "multi_workspace::NextWorkspaceInWindow",
+      "ctrl-alt-[": "multi_workspace::PreviousWorkspaceInWindow",
+      "ctrl-alt-down": "multi_workspace::NextWorkspaceInWindow",
+      "ctrl-alt-up": "multi_workspace::PreviousWorkspaceInWindow",
       "ctrl-shift-y": "workspace::ToggleAllDocks",
       "alt-r": "workspace::ResetActiveDockSize",
       // For 0px parameter, uses UI font size value.
@@ -672,6 +674,8 @@
     "use_key_equivalents": true,
     "bindings": {
       "ctrl-n": "multi_workspace::NewWorkspaceInWindow",
+      "up": "multi_workspace::PreviousWorkspaceInWindow",
+      "down": "multi_workspace::NextWorkspaceInWindow",
     },
   },
   {

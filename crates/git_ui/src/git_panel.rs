@@ -5700,6 +5700,10 @@ impl Panel for GitPanel {
         Box::new(ToggleFocus)
     }
 
+    fn starts_open(&self, _window: &Window, _cx: &App) -> bool {
+        true
+    }
+
     fn activation_priority(&self) -> u32 {
         2
     }
